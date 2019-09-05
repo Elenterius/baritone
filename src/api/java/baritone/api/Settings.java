@@ -40,7 +40,7 @@ import java.util.function.Consumer;
  * @author leijurv
  */
 public final class Settings {
-
+   
     /**
      * Allow Baritone to break blocks
      */
@@ -171,7 +171,9 @@ public final class Settings {
             Blocks.CRAFTING_TABLE,
             Blocks.FURNACE,
             Blocks.CHEST,
-            Blocks.TRAPPED_CHEST
+            Blocks.TRAPPED_CHEST,
+            Blocks.STANDING_SIGN,
+            Blocks.WALL_SIGN
     )));
 
     /**
@@ -599,6 +601,17 @@ public final class Settings {
     public final Setting<Boolean> prefixControl = new Setting<>(true);
 
     /**
+     * Always prefer silk touch tools over regular tools. This will not sacrifice speed, but it will always prefer silk
+     * touch tools over other tools of the same speed. This includes always choosing ANY silk touch tool over your hand.
+     */
+    public final Setting<Boolean> preferSilkTouch = new Setting<>(false);
+
+    /*
+     * Censor coordinates in goals and block positions
+     */
+    public final Setting<Boolean> censorCoordinates = new Setting<>(false);
+
+    /**
      * Don't stop walking forward when you need to break blocks in your way
      */
     public final Setting<Boolean> walkWhileBreaking = new Setting<>(true);
@@ -659,7 +672,12 @@ public final class Settings {
     public final Setting<Integer> exploreMaintainY = new Setting<>(64);
 
     /**
-     * Replant nether wart while farming
+     * Replant normal Crops while farming and leave cactus and sugarcane to regrow
+     */
+    public final Setting<Boolean> replantCrops = new Setting<>(true);
+
+    /**
+     * Replant nether wart while farming. This setting only has an effect when replantCrops is also enabled
      */
     public final Setting<Boolean> replantNetherWart = new Setting<>(false);
 
@@ -727,6 +745,11 @@ public final class Settings {
     public final Setting<Boolean> mineScanDroppedItems = new Setting<>(true);
 
     /**
+     * Trim incorrect positions too far away, helps performance but hurts reliability in very large schematics
+     */
+    public final Setting<Boolean> distanceTrim = new Setting<>(true);
+
+    /**
      * Cancel the current path if the goal has changed, and the path originally ended in the goal but doesn't anymore.
      * <p>
      * Currently only runs when either MineBehavior or FollowBehavior is active.
@@ -757,6 +780,16 @@ public final class Settings {
      * couldn't. If you don't want it to look like you're X-Raying, turn this on
      */
     public final Setting<Boolean> legitMine = new Setting<>(false);
+    
+    /**
+     *  Tells Baritone to go home after mining
+     */
+    public final Setting<Boolean> miningGoHome = new Setting<>(true);
+    
+    /**
+     *  Tells Baritone to check if there is enough Space in the Inventory, while mining
+     */
+    public final Setting<Boolean> miningCheckInventory = new Setting<>(true);
 
     /**
      * What Y level to go to for legit strip mining
@@ -982,10 +1015,10 @@ public final class Settings {
     }
 
     @SuppressWarnings("unchecked")
-    public <T> List<Setting<T>> getAllValuesByType(Class<T> klass) {
+    public <T> List<Setting<T>> getAllValuesByType(Class<T> cla$$) {
         List<Setting<T>> result = new ArrayList<>();
         for (Setting<?> setting : allSettings) {
-            if (setting.getValueClass().equals(klass)) {
+            if (setting.getValueClass().equals(cla$$)) {
                 result.add((Setting<T>) setting);
             }
         }
