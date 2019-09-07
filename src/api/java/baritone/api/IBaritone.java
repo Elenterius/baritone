@@ -66,6 +66,12 @@ public interface IBaritone {
     IMineProcess getMineProcess();
 
     /**
+     * @return The {@link IExcavateProcess} instance
+     * @see IExcavateProcess
+     */
+    IExcavateProcess getExcavateProcess();
+
+    /**
      * @return The {@link IBuilderProcess} instance
      * @see IBuilderProcess
      */

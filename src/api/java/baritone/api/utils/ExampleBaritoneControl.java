@@ -31,6 +31,7 @@ import baritone.api.process.IBaritoneProcess;
 import baritone.api.process.ICustomGoalProcess;
 import baritone.api.process.IGetToBlockProcess;
 import net.minecraft.block.Block;
+import net.minecraft.block.BlockFalling;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ChunkProviderClient;
 import net.minecraft.crash.CrashReport;
@@ -518,6 +519,32 @@ public class ExampleBaritoneControl implements Helper, AbstractGameEventListener
             }
             baritone.getMineProcess().mineByName(0, blockTypes);
             logDirect("Started mining blocks of type " + Arrays.toString(blockTypes));
+            return true;
+        }
+        if (msg.startsWith("excavate")) {
+            repack();
+            String[] blockTypes = msg.substring(8).trim().split(" ");
+            try {
+                int quantity = Integer.parseInt(blockTypes[1]);
+                Block block = BlockUtils.stringToBlockRequired(blockTypes[0]);
+                baritone.getMineProcess().mine(quantity, block);
+                logDirect("Will excavate " + quantity + " " + blockTypes[0]);
+                return true;
+            } catch (NumberFormatException | ArrayIndexOutOfBoundsException | NullPointerException ex) {
+            }
+            for (String s : blockTypes) {
+                Block block = BlockUtils.stringToBlockNullable(s);
+                if (block == null) {
+                    logDirect(s + " isn't a valid block name");
+                    return true;
+                }
+                if (!(block instanceof BlockFalling)) {
+                    logDirect(s + " isn't a supported block type");
+                    return true;
+                }
+            }
+            baritone.getExcavateProcess().mineByName(0, blockTypes);
+            logDirect("Started excavating blocks of type " + Arrays.toString(blockTypes));
             return true;
         }
         if (msg.equals("click")) {

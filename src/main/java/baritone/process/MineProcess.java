@@ -281,8 +281,13 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         if (locs.isEmpty()) {
             logDirect("No locations for " + mining + " known, cancelling");
             if (Baritone.settings().miningGoHome.value) {
-                Goal goal = new GoalBlock(baritone.getWorldProvider().getCurrentWorld().getWaypoints().getMostRecentByTag(IWaypoint.Tag.HOME).getLocation());
-                baritone.getCustomGoalProcess().setGoalAndPath(goal);
+                IWaypoint waypoint = baritone.getWorldProvider().getCurrentWorld().getWaypoints().getMostRecentByTag(IWaypoint.Tag.HOME);
+                if (waypoint != null) {
+                    Goal goal = new GoalBlock(waypoint.getLocation());
+                    baritone.getCustomGoalProcess().setGoalAndPath(goal);
+                } else {
+                    logDirect("No recent waypoint found, can't return home");
+                }
             }
             cancel();
             return;
