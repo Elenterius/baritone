@@ -40,14 +40,11 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.NonNullList;
 import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.MathHelper;
-import net.minecraft.util.math.Vec3d;
 import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.World;
 
 import java.util.*;
 import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 import static baritone.api.pathing.movement.ActionCosts.COST_INF;
 
@@ -70,8 +67,8 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
     private int desiredQuantity;
     private int tickCount;
 
-    private BetterBlockPos startPos;
-    private BetterBlockPos currMiddlePos;
+    private BlockPos startPos;
+    private BlockPos currMiddlePos;
     private double radiusSqr = 16 * 16;
 
     public ExcavateProcess(Baritone baritone) {
@@ -96,7 +93,7 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
                 }
                 List<Item> miningDrops = new ArrayList<>();
                 for (Block block : excavationTargets) {
-                    miningDrops.add(block.getItemDropped(excavationTargets.get(0).getDefaultState(), ctx.world(), new BlockPos(0, 0, 0), 0).asItem());
+                    miningDrops.add(block.getItemDropped(excavationTargets.get(0).getDefaultState(), ctx.world(), null, 0).asItem());
                 }
                 if (miningDrops.contains(stack.getItem()) && stack.getMaxStackSize() != stack.getCount()) {
                     DropsHaveSpace.add(stack.getItem());
@@ -105,7 +102,7 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
             if (inventoryIsFull && !DropsHaveSpace.isEmpty()) {
                 inventoryIsFull = false;
                 for (Block block : excavationTargets) {
-                    if (!DropsHaveSpace.contains(block.getItemDropped(excavationTargets.get(0).getDefaultState(), ctx.world(), new BlockPos(0, 0, 0), 0).asItem())) {
+                    if (!DropsHaveSpace.contains(block.getItemDropped(excavationTargets.get(0).getDefaultState(), ctx.world(), null, 0).asItem())) {
                         excavationTargets.remove(block);
                     }
                 }
@@ -146,23 +143,25 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
             cancel();
             return null;
         }
+        //TODO: remove searching of faraway/non-visible excavation targets?
         int mineGoalUpdateInterval = Baritone.settings().mineGoalUpdateInterval.value;
-        List<BlockPos> curr = new ArrayList<>(knownTargetLocations);
+
+        List<BlockPos> currTargetLocations = new ArrayList<>(knownTargetLocations);
         if (mineGoalUpdateInterval != 0 && tickCount++ % mineGoalUpdateInterval == 0) { // big brain
             CalculationContext context = new CalculationContext(baritone, true);
-            Baritone.getExecutor().execute(() -> rescan(curr, context));
+            Baritone.getExecutor().execute(() -> rescan(currTargetLocations, context));
         }
         addNearbyTargets();
 
         final double reachDistanceSq = ctx.playerController().getBlockReachDistance();
-        Optional<BlockPos> maxPos = curr.stream()
+        Optional<BlockPos> maxPos = currTargetLocations.stream()
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos.up()).getBlock() instanceof BlockFalling))
                 .filter(pos -> ctx.player().getDistanceSq(pos) <= reachDistanceSq)
                 .max(Comparator.comparingDouble(Vec3i::getY));
         final int layer = maxPos.map(Vec3i::getY).orElseGet(() -> ctx.playerFeet().y - 1);
 
-        Optional<BlockPos> blockToBreak = curr.stream()
+        Optional<BlockPos> blockToBreak = currTargetLocations.stream()
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos.up()).getBlock() instanceof BlockFalling))
                 .filter(pos -> pos.getY() >= layer)
@@ -219,7 +218,7 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
         int searchDist = 10;
         double fakedBlockReachDistance = 20; // at least 10 * sqrt(3) with some extra space to account for positioning within the block
         for (int x = center.getX() - searchDist; x <= center.getX() + searchDist; x++) {
-            for (int y = center.getY() - 1; y <= center.getY() + searchDist; y++) {
+            for (int y = center.getY() - 1; y <= center.getY() + 8; y++) {
                 for (int z = center.getZ() - searchDist; z <= center.getZ() + searchDist; z++) {
                     if (excavationTargets.contains(bsi.get0(x, y, z).getBlock())) {
                         BlockPos pos = new BlockPos(x, y, z);
@@ -244,12 +243,9 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
     }
 
     private PathingCommand updateGoal() {
-        List<BlockPos> knownLocations = knownTargetLocations;
-        if (!knownLocations.isEmpty()) {
-            List<BlockPos> prunedLocations = prune(new CalculationContext(baritone), new ArrayList<>(knownLocations), excavationTargets, ORE_LOCATIONS_COUNT, blacklist);
-            Goal goal = new GoalComposite(prunedLocations.stream().map(this::breakOrCollectGoal).toArray(Goal[]::new));
-            knownTargetLocations = prunedLocations;
-            return new PathingCommand(goal, PathingCommandType.FORCE_REVALIDATE_GOAL_AND_PATH);
+        if (!knownTargetLocations.isEmpty()) {
+            Goal goal = formulateGoals(knownTargetLocations);
+            return new PathingCommand(goal, PathingCommandType.REVALIDATE_GOAL_AND_PATH);
         }
 
         if (startPos == null) {
@@ -265,6 +261,48 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
         }
 
         return new PathingCommand(branchPointRunaway, PathingCommandType.REVALIDATE_GOAL_AND_PATH);
+    }
+
+    private GoalComposite formulateGoals(List<BlockPos> knownLocations) {
+        CalculationContext ctx = new CalculationContext(baritone);
+        List<BlockPos> locations = new ArrayList<>(knownLocations);
+        int maxSize = ORE_LOCATIONS_COUNT;
+        List<BlockPos> droppedItems = droppedItemsScan(excavationTargets, ctx.world);
+
+        List<BlockPos> prunedLocations = locations.stream().distinct()
+                // get all positions that are inside unloaded chunks, known block type targets or that are dropped items
+                .filter(pos -> !ctx.bsi.worldContainsLoadedChunk(pos.getX(), pos.getZ()) || excavationTargets.contains(ctx.getBlock(pos.getX(), pos.getY(), pos.getZ())) || droppedItems.contains(pos))
+                .filter(pos -> ExcavateProcess.plausibleToBreak(ctx, pos))
+                .filter(pos -> !blacklist.contains(pos))
+                .sorted(Comparator.comparingDouble(ctx.getBaritone().getPlayerContext().player()::getDistanceSq))
+                .collect(Collectors.toList());
+        if (prunedLocations.size() > maxSize) {
+            prunedLocations = prunedLocations.subList(0, maxSize);
+        }
+
+        GoalComposite goal = new GoalComposite(prunedLocations.stream().map(pos -> assignBreakOrCollectGoal(droppedItems, pos)).toArray(Goal[]::new));
+        knownTargetLocations = prunedLocations;
+        return goal;
+    }
+
+    private Goal assignBreakOrCollectGoal(List<BlockPos> droppedItems, BlockPos pos) {
+        if (!droppedItems.contains(pos)) {
+            Block blockUp = BlockStateInterface.getBlock(ctx, pos.up());
+            Block blockUpTwo = BlockStateInterface.getBlock(ctx, pos.up(2));
+            if (blockUp instanceof BlockAir && blockUpTwo instanceof BlockAir) {
+                return new BuilderProcess.JankyGoalComposite(new GoalBreakNearbyFromTop(pos), new GoalGetToBlock(pos.up()) {
+                    @Override
+                    public boolean isInGoal(int x, int y, int z) {
+                        if (y > this.y || (x == this.x && y == this.y && z == this.z)) {
+                            return false;
+                        }
+                        return super.isInGoal(x, y, z);
+                    }
+                });
+            }
+        }
+        // only positions of item entities are left now
+        return new GoalBlock(pos);
     }
 
     private void rescan(List<BlockPos> alreadyKnown, CalculationContext context) {
@@ -283,65 +321,6 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
             return;
         }
         knownTargetLocations = locations;
-    }
-
-    private Goal breakOrCollectGoal(BlockPos pos) {
-        Block target = BlockStateInterface.getBlock(ctx, pos);
-        if (excavationTargets.contains(target)) {
-            Block blockUp = BlockStateInterface.getBlock(ctx, pos.up());
-            Block blockUpTwo = BlockStateInterface.getBlock(ctx, pos.up(2));
-            if (blockUp instanceof BlockAir && blockUpTwo instanceof BlockAir) {
-                return new BuilderProcess.JankyGoalComposite(new GoalBreakNearbyFromTop(pos), new GoalGetToBlock(pos.up()) {
-                    @Override
-                    public boolean isInGoal(int x, int y, int z) {
-                        if (y > this.y || (x == this.x && y == this.y && z == this.z)) {
-                            return false;
-                        }
-                        return super.isInGoal(x, y, z);
-                    }
-                });
-            }
-        }
-
-        // only positions of item entities are left now
-        return new GoalBlock(pos);
-    }
-
-    public static List<BlockPos> droppedItemsScan(List<Block> mining, World world) {
-        if (!Baritone.settings().mineScanDroppedItems.value) {
-            return Collections.emptyList();
-        }
-        Set<Item> searchingFor = new HashSet<>();
-        for (Block block : mining) {
-            Item drop = block.getItemDropped(block.getDefaultState(), world, null, 0).asItem();
-            Item ore = block.asItem();
-            searchingFor.add(drop);
-            searchingFor.add(ore);
-        }
-        List<BlockPos> ret = new ArrayList<>();
-        for (Entity entity : world.loadedEntityList) {
-            if (entity instanceof EntityItem) {
-                EntityItem ei = (EntityItem) entity;
-                if (searchingFor.contains(ei.getItem().getItem())) {
-                    ret.add(new BlockPos(entity));
-                }
-            }
-        }
-        return ret;
-    }
-
-    public static BlockPos getBetterBlockPosForItem(EntityItem item) {
-        int x = MathHelper.floor(item.posX);
-        int y = MathHelper.floor(item.posY);
-        int z = MathHelper.floor(item.posZ);
-        Vec3d pos = item.getPositionVector();
-        Vec3d posFloored = new Vec3d(x, y, z);
-        double discrepancy = pos.distanceTo(posFloored);
-        if (discrepancy < 0.5) {
-            return new BlockPos(x, y, z);
-        } else {
-            return new BlockPos(pos.add(discrepancy + (pos.x < posFloored.x ? 0.5 : -0.5), 0, discrepancy + (pos.z < posFloored.z ? 0.5 : -0.5)));
-        }
     }
 
     public static List<BlockPos> searchWorld(CalculationContext ctx, List<Block> targets, int maxSize, List<BlockPos> alreadyKnown, List<BlockPos> blacklist) {
@@ -366,20 +345,20 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
         return prune(ctx, locations, targets, maxSize, blacklist);
     }
 
-    private static List<BlockPos> prune(CalculationContext ctx, List<BlockPos> locations, List<Block> targets, int maxSize, List<BlockPos> blacklist) {
-        List<BlockPos> dropped = droppedItemsScan(targets, ctx.world);
+    private static List<BlockPos> prune(CalculationContext ctx, List<BlockPos> locations, List<Block> targetBlockTypes, int maxSize, List<BlockPos> blacklist) {
+        List<BlockPos> dropped = droppedItemsScan(targetBlockTypes, ctx.world);
         // remove all drops next to known locations that are still an active mining target and plausible to be broken
-        dropped.removeIf(drop -> {
-            for (BlockPos pos : locations) {
-                if (pos.distanceSq(drop) <= 9 && targets.contains(ctx.getBlock(pos.getX(), pos.getY(), pos.getZ())) && ExcavateProcess.plausibleToBreak(ctx, pos)) {
-                    return true;
-                }
-            }
-            return false;
-        });
+//        dropped.removeIf(drop -> {
+//            for (BlockPos pos : locations) {
+//                if (pos.distanceSq(drop) <= 9 && targetBlockTypes.contains(ctx.getBlock(pos.getX(), pos.getY(), pos.getZ())) && ExcavateProcess.plausibleToBreak(ctx, pos)) {
+//                    return true;
+//                }
+//            }
+//            return false;
+//        });
         List<BlockPos> prunedLocations = locations.stream().distinct()
-                // get all positions that are inside unloaded chunks, known mining targets or that are dropped items
-                .filter(pos -> !ctx.bsi.worldContainsLoadedChunk(pos.getX(), pos.getZ()) || targets.contains(ctx.getBlock(pos.getX(), pos.getY(), pos.getZ())) || dropped.contains(pos))
+                // get all positions that are inside unloaded chunks, known block type targets or that are dropped items
+                .filter(pos -> !ctx.bsi.worldContainsLoadedChunk(pos.getX(), pos.getZ()) || targetBlockTypes.contains(ctx.getBlock(pos.getX(), pos.getY(), pos.getZ())) || dropped.contains(pos))
                 .filter(pos -> ExcavateProcess.plausibleToBreak(ctx, pos))
                 .filter(pos -> !blacklist.contains(pos))
                 .sorted(Comparator.comparingDouble(ctx.getBaritone().getPlayerContext().player()::getDistanceSq))
@@ -388,6 +367,29 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
             return prunedLocations.subList(0, maxSize);
         }
         return prunedLocations;
+    }
+
+    public static List<BlockPos> droppedItemsScan(List<Block> mining, World world) {
+        if (!Baritone.settings().mineScanDroppedItems.value) {
+            return Collections.emptyList();
+        }
+        Set<Item> searchingFor = new HashSet<>();
+        for (Block block : mining) {
+            Item drop = block.getItemDropped(block.getDefaultState(), world, null, 0).asItem();
+            Item ore = block.asItem();
+            searchingFor.add(drop);
+            searchingFor.add(ore);
+        }
+        List<BlockPos> ret = new ArrayList<>();
+        for (Entity entity : world.loadedEntityList) {
+            if (entity instanceof EntityItem) {
+                EntityItem ei = (EntityItem) entity;
+                if (searchingFor.contains(ei.getItem().getItem())) {
+                    ret.add(new BlockPos(entity));
+                }
+            }
+        }
+        return ret;
     }
 
     public static boolean plausibleToBreak(CalculationContext ctx, BlockPos pos) {
