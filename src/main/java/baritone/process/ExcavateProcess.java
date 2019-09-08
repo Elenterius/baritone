@@ -154,16 +154,21 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
         addNearbyTargets();
 
         final double reachDistanceSq = ctx.playerController().getBlockReachDistance();
-        Optional<BlockPos> maxPos = currTargetLocations.stream()
-                .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
+        List<BlockPos> filtered = currTargetLocations.stream()
+
+                // experimental only get positions that are close to area TODO: pickup drops when the area is mined clean and search for new area to mine
+                .filter(pos -> pos.distanceSq(currMiddlePos) <= radiusSqr)
+
+                .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir))
                 .filter(pos -> !(BlockStateInterface.get(ctx, pos.up()).getBlock() instanceof BlockFalling))
-                .filter(pos -> ctx.player().getDistanceSq(pos) <= reachDistanceSq)
+                .collect(Collectors.toList());
+
+        Optional<BlockPos> maxPos = filtered.stream()
+                .filter(pos -> ctx.player().getDistanceSq(pos) <= reachDistanceSq) // TODO: move this up to filtered list?
                 .max(Comparator.comparingDouble(Vec3i::getY));
         final int layer = maxPos.map(Vec3i::getY).orElseGet(() -> ctx.playerFeet().y - 1);
 
-        Optional<BlockPos> blockToBreak = currTargetLocations.stream()
-                .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
-                .filter(pos -> !(BlockStateInterface.get(ctx, pos.up()).getBlock() instanceof BlockFalling))
+        Optional<BlockPos> blockToBreak = filtered.stream()
                 .filter(pos -> pos.getY() >= layer)
                 .min(Comparator.comparingDouble(ctx.player()::getDistanceSq));
 
@@ -250,7 +255,9 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
 
         if (startPos == null) {
             startPos = ctx.playerFeet();
+            currMiddlePos = startPos;
         }
+
         if (branchPointRunaway == null) {
             branchPointRunaway = new GoalRunAway(1, startPos) {
                 @Override
@@ -381,7 +388,8 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
             searchingFor.add(ore);
         }
         List<BlockPos> ret = new ArrayList<>();
-        for (Entity entity : world.loadedEntityList) {
+        List<Entity> loadedEntities = new ArrayList<>(world.loadedEntityList); // prevent ConcurrentModificationException
+        for (Entity entity : loadedEntities) {
             if (entity instanceof EntityItem) {
                 EntityItem ei = (EntityItem) entity;
                 if (searchingFor.contains(ei.getItem().getItem())) {
@@ -418,6 +426,7 @@ public final class ExcavateProcess extends BaritoneProcessHelper implements IExc
         blacklist = new ArrayList<>();
         branchPointRunaway = null;
         startPos = null;
+        currMiddlePos = null;
         if (excavationTargets != null) {
             rescan(new ArrayList<>(), new CalculationContext(baritone));
         }
