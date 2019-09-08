@@ -45,6 +45,7 @@ import net.minecraft.item.Item;
 import net.minecraft.item.ItemStack;
 import net.minecraft.util.NonNullList;
 import net.minecraft.util.math.BlockPos;
+import net.minecraft.util.math.Vec3i;
 import net.minecraft.world.World;
 
 import java.util.*;
@@ -68,6 +69,7 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
     private GoalRunAway branchPointRunaway;
     private int desiredQuantity;
     private int tickCount;
+    private boolean isMiningBlockFallingInstance;
 
     public MineProcess(Baritone baritone) {
         super(baritone);
@@ -180,16 +182,38 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         if (Baritone.settings().legitMine.value) {
             addNearby();
         }
-        Optional<BlockPos> shaft = curr.stream()
-                .filter(pos -> pos.getX() == ctx.playerFeet().getX() && pos.getZ() == ctx.playerFeet().getZ())
-                .filter(pos -> pos.getY() >= ctx.playerFeet().getY())
-                .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
-                .min(Comparator.comparingDouble(ctx.player()::getDistanceSq));
+
+        Optional<BlockPos> blockToBreak;
+        if (!isMiningBlockFallingInstance) {
+            blockToBreak = curr.stream()
+                    .filter(pos -> pos.getX() == ctx.playerFeet().getX() && pos.getZ() == ctx.playerFeet().getZ())
+                    .filter(pos -> pos.getY() >= ctx.playerFeet().getY())
+                    .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir)) // after breaking a block, it takes mineGoalUpdateInterval ticks for it to actually update this list =(
+                    .min(Comparator.comparingDouble(ctx.player()::getDistanceSq));
+        } else {
+            //TODO: improve this
+//            final double reachDistanceSq = ctx.playerController().getBlockReachDistance();
+            final double reachDistanceSq = 9; // 20.25
+            List<BlockPos> filtered = curr.stream()
+                    .filter(pos -> ctx.player().getDistanceSq(pos) <= reachDistanceSq)
+                    .filter(pos -> !(BlockStateInterface.get(ctx, pos).getBlock() instanceof BlockAir))
+                    .filter(pos -> !(BlockStateInterface.get(ctx, pos.up()).getBlock() instanceof BlockFalling))
+                    .collect(Collectors.toList());
+
+            Optional<BlockPos> maxPos = filtered.stream().max(Comparator.comparingDouble(Vec3i::getY));
+            final int layer = maxPos.map(Vec3i::getY).orElseGet(() -> ctx.playerFeet().y - 1);
+
+            blockToBreak = filtered.stream()
+                    .filter(pos -> pos.getY() >= layer)
+                    .min(Comparator.comparingDouble(ctx.player()::getDistanceSq));
+        }
+
         baritone.getInputOverrideHandler().clearAllKeys();
-        if (shaft.isPresent() && ctx.player().onGround) {
-            BlockPos pos = shaft.get();
+        if (blockToBreak.isPresent() && ctx.player().onGround) {
+            BlockPos pos = blockToBreak.get();
             IBlockState state = baritone.bsi.get0(pos);
-            if (!MovementHelper.avoidBreaking(baritone.bsi, pos.getX(), pos.getY(), pos.getZ(), state)) {
+//            boolean isFallingBlockAbove = baritone.bsi.get0(pos.up()) instanceof BlockFalling;
+            if (/*!isFallingBlockAbove &&*/ !MovementHelper.avoidBreaking(baritone.bsi, pos.getX(), pos.getY(), pos.getZ(), state)) {
                 Optional<Rotation> rot = RotationUtils.reachable(ctx, pos);
                 if (rot.isPresent() && isSafeToCancel) {
                     baritone.getLookBehavior().updateTarget(rot.get(), true);
@@ -381,7 +405,8 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
             searchingFor.add(ore);
         }
         List<BlockPos> ret = new ArrayList<>();
-        for (Entity entity : world.loadedEntityList) {
+        List<Entity> loadedEntities = new ArrayList<>(world.loadedEntityList); // prevent ConcurrentModificationException
+        for (Entity entity : loadedEntities) {
             if (entity instanceof EntityItem) {
                 EntityItem ei = (EntityItem) entity;
                 if (searchingFor.contains(ei.getItem().getItem())) {
@@ -495,7 +520,10 @@ public final class MineProcess extends BaritoneProcessHelper implements IMinePro
         this.branchPoint = null;
         this.branchPointRunaway = null;
         if (mining != null) {
+            this.isMiningBlockFallingInstance = mining.stream().anyMatch(block -> block instanceof BlockFalling);
             rescan(new ArrayList<>(), new CalculationContext(baritone));
+        } else {
+            this.isMiningBlockFallingInstance = false;
         }
     }
 }
