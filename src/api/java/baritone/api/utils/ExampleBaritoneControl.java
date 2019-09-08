@@ -538,10 +538,10 @@ public class ExampleBaritoneControl implements Helper, AbstractGameEventListener
                     logDirect(s + " isn't a valid block name");
                     return true;
                 }
-                if (!(block instanceof BlockFalling)) {
-                    logDirect(s + " isn't a supported block type");
-                    return true;
-                }
+//                if (!(block instanceof BlockFalling)) {
+//                    logDirect(s + " isn't a supported block type");
+//                    return true;
+//                }
             }
             baritone.getExcavateProcess().mineByName(0, blockTypes);
             logDirect("Started excavating blocks of type " + Arrays.toString(blockTypes));
